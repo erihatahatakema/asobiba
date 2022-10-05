@@ -1,0 +1,53 @@
+WITH target_merchants AS (
+    SELECT
+        public_id
+    FROM
+        UNNEST(SPLIT(@TARGET_PUBLIC_ID, ',')) AS public_id
+), plan_payments AS (
+    SELECT
+        merchants.merchant_id,
+        public_id,
+        merchant_subscription_histories.premium_plan_canonical_id AS plan,
+        payments.amount AS price,
+        CONCAT(DATE(merchant_payment_histories.activated_from, 'Asia/Tokyo'), ' ~ ', DATE(merchant_payment_histories.activated_until, 'Asia/Tokyo')) AS paid_for,
+        DATETIME(merchant_payment_histories.created_at, 'Asia/Tokyo') AS created_at,
+        DATETIME(payments.refunded_at, 'Asia/Tokyo') AS refunded_at,
+        ROW_NUMBER() OVER(PARTITION BY public_id ORDER BY merchant_payment_histories.created_at DESC) AS row_number
+    FROM
+        `hey-data-pf-production.mart_reserve.merchants` AS merchants
+        JOIN `hey-data-pf-production.tmp_warehouse_reserve_coubic.db_merchant_payment_histories` AS merchant_payment_histories USING(merchant_id)
+        JOIN `hey-data-pf-production.tmp_warehouse_reserve_coubic.db_payments` AS payments ON merchant_payment_histories.payment_id = payments.id
+        JOIN target_merchants USING(public_id)
+        LEFT JOIN `hey-data-pf-production.tmp_warehouse_reserve_coubic.db_merchant_subscription_histories` AS merchant_subscription_histories
+        ON merchants.merchant_id = merchant_subscription_histories.merchant_id AND payments.id = merchant_subscription_histories.payment_id
+), booking_fees AS (
+    SELECT
+        merchants.merchant_id,
+        merchants.public_id,
+        '予約超過手数料' AS plan,
+        fee AS price,
+        FORMAT_DATE('%Y-%m-%d', DATE(merchant_booking_fees.paid_at, 'Asia/Tokyo')) AS paid_for,
+        DATE(merchant_booking_fees.created_at, 'Asia/Tokyo') AS created_at,
+        DATE(payments.refunded_at, 'Asia/Tokyo') AS refunded_at,
+        ROW_NUMBER() OVER(PARTITION BY public_id ORDER BY merchant_booking_fees.created_at DESC) AS row_number
+    FROM
+        `hey-data-pf-production.tmp_warehouse_reserve_coubic.db_merchant_booking_fees` AS merchant_booking_fees
+        JOIN `hey-data-pf-production.mart_reserve.merchants` AS merchants USING(merchant_id)
+        JOIN target_merchants USING(public_id)
+        LEFT JOIN `hey-data-pf-production.tmp_warehouse_reserve_coubic.db_payments` AS payments ON merchant_booking_fees.payment_id = payments.id
+)
+SELECT
+    * EXCEPT(row_number)
+FROM
+    plan_payments
+WHERE
+    row_number <= 3
+UNION ALL
+SELECT
+    * EXCEPT(row_number)
+FROM
+    booking_fees
+WHERE
+    row_number <= 3
+ORDER BY
+    public_id, plan, created_at
