@@ -51,3 +51,4 @@ WHERE
     row_number <= 3
 ORDER BY
     public_id, plan, created_at
+    
